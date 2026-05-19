@@ -57,3 +57,26 @@ def test_no_host_rejected() -> None:
 def test_private_override_allows_internal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GATEWAY_MCP_ALLOW_PRIVATE_HOSTS", "true")
     validate_mcp_url("https://10.0.0.5/mcp", has_authorization_token=False)
+
+
+def test_unresolvable_host_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hostnames that fail to resolve are rejected (DNS-rebinding TOCTOU).
+
+    A name that doesn't resolve at validation time could resolve to an internal
+    address at fetch time. Operators that genuinely want this behaviour opt in
+    via GATEWAY_MCP_ALLOW_PRIVATE_HOSTS.
+    """
+    from gateway.services import url_safety
+
+    monkeypatch.setattr(url_safety, "_resolve_all", lambda _host: [])
+    with pytest.raises(UnsafeURLError, match="could not be resolved"):
+        validate_mcp_url("https://does-not-exist.invalid/mcp", has_authorization_token=False)
+
+
+def test_unresolvable_host_allowed_with_private_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The private-hosts opt-out also covers unresolvable hostnames."""
+    from gateway.services import url_safety
+
+    monkeypatch.setenv("GATEWAY_MCP_ALLOW_PRIVATE_HOSTS", "true")
+    monkeypatch.setattr(url_safety, "_resolve_all", lambda _host: [])
+    validate_mcp_url("https://does-not-exist.invalid/mcp", has_authorization_token=False)

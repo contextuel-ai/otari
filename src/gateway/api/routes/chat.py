@@ -32,6 +32,7 @@ from gateway.services.mcp_client import MCPClientPool
 from gateway.services.mcp_loop import (
     DEFAULT_MAX_TOOL_ITERATIONS,
     MAX_TOOL_ITERATIONS_CAP,
+    MaxToolIterationsExceeded,
     inject_purpose_hints,
     mcp_tool_loop,
     mcp_tool_loop_stream,
@@ -759,6 +760,20 @@ async def chat_completions(
                     completion = await acompletion(**completion_kwargs)  # type: ignore[assignment]
             except HTTPException:
                 raise
+            except MaxToolIterationsExceeded as exc:
+                # The gateway's own iteration cap was hit, not an upstream
+                # failure. Surface a distinct 422 so callers can tell a
+                # runaway tool loop apart from a provider outage.
+                logger.warning(
+                    "Tool loop iteration cap hit request_id=%s position=%d cap=%d",
+                    platform_route.request_id,
+                    attempt.position,
+                    max_tool_iterations,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=str(exc),
+                ) from exc
             except BaseException as exc:
                 retryable, error_class = _classify_upstream_error(exc)
                 background_tasks.add_task(
@@ -856,6 +871,25 @@ async def chat_completions(
             )
     except HTTPException:
         raise
+    except MaxToolIterationsExceeded as e:
+        # Gateway-owned cap, not an upstream provider failure. 422 lets
+        # callers distinguish a runaway tool loop from a real outage.
+        logger.warning("Tool loop iteration cap hit (standalone): cap=%d", max_tool_iterations)
+        if db is not None:
+            await log_usage(
+                db=db,
+                log_writer=log_writer,
+                api_key_id=api_key_id,
+                model=model,
+                provider=provider,
+                endpoint="/v1/chat/completions",
+                user_id=user_id,
+                error=str(e),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        ) from e
     except Exception as e:
         if db is not None:
             await log_usage(

@@ -394,6 +394,11 @@ async def test_stream_loop_passes_chunks_through_and_terminates(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_stream_loop_runs_mcp_tool_and_continues(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Intermediate ``tool_calls`` terminal chunks are dropped — forwarding them
+    would make OpenAI-compatible clients stop reading before the final answer.
+
+    See ``mcp_tool_loop_stream`` docstring for the rationale.
+    """
     iter_streams = iter(
         [
             _async_iter(
@@ -418,5 +423,81 @@ async def test_stream_loop_runs_mcp_tool_and_continues(monkeypatch: pytest.Monke
     ):
         if c.choices and c.choices[0].finish_reason:
             finishes.append(c.choices[0].finish_reason)
-    assert finishes == ["tool_calls", "stop"]
+    # Only the final iteration's `stop` is forwarded; the intermediate
+    # `tool_calls` terminal is suppressed.
+    assert finishes == ["stop"]
     assert pool.calls == [("fetch_url", {})]
+
+
+@pytest.mark.asyncio
+async def test_stream_loop_forwards_terminal_when_model_emits_foreign_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the model asks for a *foreign* tool, the loop terminates and the
+    terminal ``tool_calls`` chunk MUST reach the client so they know to dispatch.
+    """
+    iter_streams = iter(
+        [
+            _async_iter(
+                _chunk(tool_calls=[(0, "call_1", "user_tool", "{}")]),
+                _chunk(finish="tool_calls"),
+            ),
+        ]
+    )
+
+    async def fake_acompletion(**kwargs: Any) -> AsyncIterator[ChatCompletionChunk]:
+        return next(iter_streams)
+
+    monkeypatch.setattr(mcp_loop_module, "acompletion", fake_acompletion)
+
+    pool = _FakePool(tool_names=["fetch_url"])  # doesn't own user_tool
+    finishes: list[str | None] = []
+    async for c in mcp_tool_loop_stream(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "go"}]},
+        pool=pool,  # type: ignore[arg-type]
+        max_iterations=5,
+    ):
+        if c.choices and c.choices[0].finish_reason:
+            finishes.append(c.choices[0].finish_reason)
+    assert finishes == ["tool_calls"]
+    assert pool.calls == []
+
+
+@pytest.mark.asyncio
+async def test_loop_mixed_tools_executes_mcp_and_returns_only_foreign(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-streaming variant: if the model emits a mix of MCP and foreign
+    tool_calls, the loop executes the MCP subset internally and filters those
+    out of the returned completion. The caller only sees what they can
+    themselves dispatch.
+    """
+    only_completion = _completion(
+        finish="tool_calls",
+        tool_calls=[
+            ("mcp_id", "fetch_url", "{}"),
+            ("user_id", "user_tool", "{}"),
+        ],
+    )
+
+    async def fake_acompletion(**kwargs: Any) -> ChatCompletion:
+        return only_completion
+
+    monkeypatch.setattr(mcp_loop_module, "acompletion", fake_acompletion)
+
+    pool = _FakePool(tool_names=["fetch_url"], results={"fetch_url": "ok"})
+    out = await mcp_tool_loop(
+        completion_kwargs={
+            "model": "fake",
+            "messages": [{"role": "user", "content": "go"}],
+            "tools": [{"type": "function", "function": {"name": "user_tool", "parameters": {}}}],
+        },
+        pool=pool,  # type: ignore[arg-type]
+        max_iterations=5,
+    )
+    # MCP subset was executed internally.
+    assert pool.calls == [("fetch_url", {})]
+    # Returned completion only carries the foreign call for the client.
+    remaining = out.choices[0].message.tool_calls or []
+    remaining_names = [tc.function.name for tc in remaining if hasattr(tc, "function")]
+    assert remaining_names == ["user_tool"]

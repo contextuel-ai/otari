@@ -77,9 +77,19 @@ def validate_mcp_url(url: str, *, has_authorization_token: bool) -> None:
     except ValueError:
         addresses = _resolve_all(host)
         if not addresses:
-            # Couldn't resolve — allow through; the request will fail at fetch time.
-            # Don't leak resolution success/failure via reject behaviour.
-            return
+            # Couldn't resolve the host at validation time. Rejecting is the
+            # safer default: a hostname that fails to resolve here could
+            # later resolve to an internal address at fetch time (the
+            # classic DNS-rebinding TOCTOU). Operators that explicitly want
+            # to allow unresolvable hostnames (private DNS,
+            # hosts-file-driven setups, etc.) can opt in via
+            # GATEWAY_MCP_ALLOW_PRIVATE_HOSTS, which short-circuits this
+            # whole function above.
+            raise UnsafeURLError(
+                f"MCP server host {host!r} could not be resolved at validation time; "
+                "rejecting to avoid DNS-rebinding (a later lookup could resolve to a "
+                "private address). Set GATEWAY_MCP_ALLOW_PRIVATE_HOSTS=true to override."
+            )
 
     for addr in addresses:
         if addr.is_loopback and _allow_loopback():

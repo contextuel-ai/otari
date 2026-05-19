@@ -95,10 +95,13 @@ def _execute_split(tool_calls: list[dict[str, Any]], pool: MCPClientPool) -> tup
 async def _execute_mcp_calls(pool: MCPClientPool, mcp_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Run each MCP tool call and return the resulting tool-role messages.
 
-    Tool failures (network errors, server errors, schema mismatches) are converted to a
-    ``[tool error] …`` message so the model can recover. Cancellation and programming
-    errors (KeyboardInterrupt, asyncio.CancelledError, MemoryError) are left to propagate —
-    those are not "the tool failed, retry"; the request itself is going away.
+    Tool failures (network errors, server errors, schema mismatches, MCP-specific
+    or httpx-level transport errors) are converted to a ``[tool error] …`` message
+    so the model can recover. Only cancellation/interrupt-class exceptions
+    (``asyncio.CancelledError``, ``KeyboardInterrupt``) escape — they inherit
+    from ``BaseException`` and never reach the ``Exception`` clause. That's the
+    standard idiom for "treat tool failures as recoverable, let cancellation
+    propagate".
     """
     out: list[dict[str, Any]] = []
     for tc in mcp_calls:
@@ -109,7 +112,7 @@ async def _execute_mcp_calls(pool: MCPClientPool, mcp_calls: list[dict[str, Any]
             args = {}
         try:
             text = await pool.call_tool(name, args)
-        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        except Exception as exc:  # noqa: BLE001 — see docstring
             logger.warning("MCP tool %s execution failed: %s", name, exc)
             text = f"[tool error] {exc}"
         out.append({"role": "tool", "tool_call_id": tc["id"] or "", "content": text})
@@ -124,10 +127,18 @@ async def mcp_tool_loop_stream(
 ) -> AsyncIterator[ChatCompletionChunk]:
     """Yield chunks across multiple `acompletion(stream=True)` calls, with MCP execution between rounds.
 
-    All chunks from intermediate iterations (including the tool_call deltas) are yielded to the
-    caller, so a client that wants to render "thinking" gets it for free. The loop terminates as
-    soon as an iteration's finish_reason is anything other than "tool_calls", or when the model
-    requests a tool the gateway doesn't own.
+    Tool-call deltas from intermediate iterations are streamed straight through to the
+    caller (so clients that want to render "thinking" still get those bytes), but the
+    *terminal* chunk of each intermediate iteration — the one carrying
+    ``finish_reason="tool_calls"`` — is buffered and dropped if the loop is going to
+    iterate again. Forwarding that chunk would tell an OpenAI-compatible client "this
+    is the final answer", and most SDKs stop reading at that point; subsequent
+    iterations' content would be silently truncated.
+
+    The terminal chunk is forwarded in three cases:
+      * the iteration ended with a non-``tool_calls`` finish_reason (e.g. ``stop``),
+      * the model produced foreign tool_calls (caller needs to dispatch them), or
+      * the model produced no MCP-owned calls at all (loop exits, terminal goes through).
     """
     messages = list(completion_kwargs.get("messages") or [])
     user_tools = list(completion_kwargs.get("tools") or [])
@@ -144,25 +155,47 @@ async def mcp_tool_loop_stream(
         stream: AsyncIterator[ChatCompletionChunk] = await acompletion(**kwargs)  # type: ignore[assignment]
         slots: dict[int, dict[str, Any]] = {}
         finish_reason: str | None = None
+        pending_terminal: ChatCompletionChunk | None = None
 
         async for chunk in stream:
+            chunk_is_terminal = False
             if chunk.choices:
                 choice = chunk.choices[0]
                 delta = getattr(choice, "delta", None)
                 if delta is not None and getattr(delta, "tool_calls", None):
                     _accumulate_tool_call_deltas(slots, delta.tool_calls)
                 if choice.finish_reason:
-                    finish_reason = choice.finish_reason
+                    # Sticky-tool-calls: a trailing ``stop`` chunk from
+                    # Anthropic must not override ``tool_calls`` we've
+                    # already seen on this same iteration.
+                    if not (finish_reason == "tool_calls" and choice.finish_reason != "tool_calls"):
+                        finish_reason = choice.finish_reason
+                    chunk_is_terminal = True
+            if chunk_is_terminal:
+                pending_terminal = chunk
+                continue
             yield chunk
 
         if finish_reason != "tool_calls":
+            if pending_terminal is not None:
+                yield pending_terminal
             return
 
         tool_calls = _finalize_tool_calls(slots)
         mcp_calls, has_foreign = _execute_split(tool_calls, pool)
         if has_foreign or not mcp_calls:
+            # Mixed (has_foreign with mcp_calls) is handled the same as
+            # all-foreign here: the terminal chunk is forwarded so the
+            # client sees the full tool_calls set, and any MCP-owned calls
+            # in a mixed batch are left for a follow-up turn (the
+            # non-streaming variant filters them out; rewriting deltas
+            # mid-stream is too invasive to do here).
+            if pending_terminal is not None:
+                yield pending_terminal
             return
 
+        # All-MCP: silently drop the terminal so the client doesn't think
+        # this iteration's response was the final answer.
         messages.append({"role": "assistant", "tool_calls": mcp_calls})
         messages.extend(await _execute_mcp_calls(pool, mcp_calls))
 
@@ -218,7 +251,30 @@ async def mcp_tool_loop(
             if hasattr(tc, "function")
         ]
         mcp_calls, has_foreign = _execute_split(tool_calls, pool)
-        if has_foreign or not mcp_calls:
+        if has_foreign:
+            # Mixed batch: execute the MCP-owned subset internally so its
+            # work isn't wasted, then filter those calls out of the returned
+            # completion so the caller only sees tool_calls it can itself
+            # dispatch. The conversation continues client-side; if the
+            # caller wants to keep using the gateway's MCP tools they'll
+            # send the foreign-tool results back on the next request.
+            if mcp_calls:
+                await _execute_mcp_calls(pool, mcp_calls)
+                foreign_sdk_calls = [
+                    tc for tc in sdk_calls if hasattr(tc, "function") and not pool.owns_tool(tc.function.name)
+                ]
+                try:
+                    choice.message.tool_calls = foreign_sdk_calls or None
+                except (AttributeError, TypeError):
+                    # If the SDK model is frozen, fall back to leaving the
+                    # original list. Cleaner UX requires SDK mutability.
+                    logger.warning(
+                        "MCP-mixed: could not filter tool_calls on response; client will see MCP calls "
+                        "the gateway already executed (no-op on the client side).",
+                    )
+            _fold_usage(completion, acc_prompt, acc_completion)
+            return completion
+        if not mcp_calls:
             _fold_usage(completion, acc_prompt, acc_completion)
             return completion
 
