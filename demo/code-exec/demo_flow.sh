@@ -19,6 +19,10 @@
 #   --openai      needs OPENAI_API_KEY in .env
 #   --llamafile   needs a llamafile server reachable from the gateway container
 #                 (LLAMAFILE_API_BASE; default http://host.docker.internal:8080/v1)
+#                 If no server is already running and $LLAMAFILE_BIN points at
+#                 an executable *.llamafile, the script will boot it on
+#                 :8080 and kill it on exit. Otherwise it prints a download
+#                 command and skips the --llamafile leg.
 
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -33,6 +37,64 @@ fi
 
 BOLD=$'\e[1m'; DIM=$'\e[2m'; YEL=$'\e[33m'; CYN=$'\e[36m'; GRN=$'\e[32m'; RED=$'\e[31m'; RST=$'\e[0m'
 
+# ───── llamafile auto-start ───────────────────────────────────────────────
+# Tracked across the whole script so the EXIT trap can clean up.
+_LLAMAFILE_PID=""
+_cleanup_llamafile() {
+  if [[ -n "$_LLAMAFILE_PID" ]] && kill -0 "$_LLAMAFILE_PID" 2>/dev/null; then
+    echo "${DIM}stopping auto-started llamafile (pid $_LLAMAFILE_PID)…${RST}"
+    kill "$_LLAMAFILE_PID" 2>/dev/null || true
+  fi
+}
+trap _cleanup_llamafile EXIT
+
+# Try to boot a llamafile on port 8080 and wait until $probe/models is up.
+# $probe is the URL the preflight check uses (e.g. http://127.0.0.1:8080/v1).
+#
+# We only auto-start when the operator has pointed $LLAMAFILE_BIN at an
+# executable. Scanning the home directory would be a guess that breaks
+# on every machine that doesn't match the maintainer's layout, so the
+# fallback is to print a download recipe and let the user opt in.
+_autostart_llamafile() {
+  local probe="$1"
+  if [[ -z "${LLAMAFILE_BIN:-}" || ! -x "${LLAMAFILE_BIN:-/nonexistent}" ]]; then
+    cat <<EOF
+${DIM}  No llamafile is reachable and \$LLAMAFILE_BIN is not set.
+  To enable the --llamafile leg, download a llamafile once and point
+  \$LLAMAFILE_BIN at it:
+
+      curl -L -o /tmp/qwen3-4b.llamafile \\
+          https://huggingface.co/Mozilla/Qwen3-4B-Instruct-2507-llamafile/resolve/main/Qwen3-4B-Instruct-2507-Q5_K_S.llamafile
+      chmod +x /tmp/qwen3-4b.llamafile
+      export LLAMAFILE_BIN=/tmp/qwen3-4b.llamafile
+
+  Then re-run this script. Subsequent runs reuse the same file.${RST}
+EOF
+    return 1
+  fi
+  echo "${DIM}auto-starting llamafile from ${LLAMAFILE_BIN##*/} (≈30s warmup)…${RST}"
+  # `-ngl 0` keeps CPU-only inference predictable across machines; users who
+  # want GPU offload can pre-start their own llamafile and skip auto-start.
+  "$LLAMAFILE_BIN" --server --port 8080 --host 0.0.0.0 -ngl 0 \
+    > /tmp/llamafile-demo.log 2>&1 &
+  _LLAMAFILE_PID=$!
+  for _ in $(seq 1 90); do
+    if curl -sf "${probe}/models" >/dev/null 2>&1; then
+      echo "${DIM}  llamafile ready (pid $_LLAMAFILE_PID)${RST}"
+      return 0
+    fi
+    # If the process died, fail fast instead of timing out 90s later.
+    if ! kill -0 "$_LLAMAFILE_PID" 2>/dev/null; then
+      echo "${YEL}  llamafile exited early — see /tmp/llamafile-demo.log${RST}"
+      _LLAMAFILE_PID=""
+      return 1
+    fi
+    sleep 1
+  done
+  echo "${YEL}  llamafile didn't become ready in 90s — see /tmp/llamafile-demo.log${RST}"
+  return 1
+}
+
 # Provider selection ────────────────────────────────────────────────────────
 PROVIDERS=()
 while [[ $# -gt 0 ]]; do
@@ -41,7 +103,10 @@ while [[ $# -gt 0 ]]; do
     --openai)    PROVIDERS+=("openai");    shift ;;
     --llamafile) PROVIDERS+=("llamafile"); shift ;;
     -h|--help)
-      grep -E "^# " "$0" | sed 's/^# //'
+      # Print the leading comment block (everything between the shebang and
+      # the first blank line). Stops there so inline `# …` comments later
+      # in the file don't bleed into the help text.
+      awk 'NR==1 && /^#!/ {next} /^$/ {exit} /^# ?/ {sub(/^# ?/, ""); print}' "$0"
       exit 0
       ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
@@ -78,8 +143,10 @@ for p in "${PROVIDERS[@]}"; do
       probe=${base/host.docker.internal/127.0.0.1}
       if curl -sf "${probe}/models" >/dev/null 2>&1; then
         ENABLED+=("llamafile")
+      elif _autostart_llamafile "$probe"; then
+        ENABLED+=("llamafile")
       else
-        echo "${YEL}skipping --llamafile: no llamafile reachable at $probe${RST}"
+        echo "${YEL}skipping --llamafile: no llamafile reachable at $probe and none to auto-start${RST}"
       fi
       ;;
   esac
