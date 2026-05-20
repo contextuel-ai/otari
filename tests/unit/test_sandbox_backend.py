@@ -68,8 +68,9 @@ async def test_creates_session_on_enter_and_destroys_on_exit(monkeypatch: pytest
 @pytest.mark.asyncio
 async def test_call_tool_dispatches_code_to_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
     # Shape mirrors what the sandbox actually returns — see
-    # ``infra/sandbox-image/sandbox/models.py``: ``result_block.content`` is
-    # a single ``CodeExecutionResultContent`` object, not a list.
+    # https://github.com/mozilla-ai/otari-sandbox-container/blob/main/sandbox/models.py
+    # ``result_block.content`` is a single ``CodeExecutionResultContent``
+    # object, not a list.
     result_block = {
         "type": "code_execution_tool_result",
         "tool_use_id": "t1",

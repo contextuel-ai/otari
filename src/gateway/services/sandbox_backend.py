@@ -2,9 +2,10 @@
 
 A backend the tool-use loop in :mod:`gateway.services.mcp_loop` dispatches
 to whenever the model emits a ``code_execution(code=…)`` call. The sandbox
-container is a separate service (built from ``infra/sandbox-image/`` or
-pulled from a published image) that runs a Python REPL with a curated set
-of data-science libraries pre-installed.
+container lives in its own repo
+(https://github.com/mozilla-ai/otari-sandbox-container) and is pulled from
+GHCR (``ghcr.io/mozilla-ai/otari-sandbox-container``). It runs a Python
+REPL with a curated set of data-science libraries pre-installed.
 
 Wire shape against the sandbox container:
 
@@ -171,7 +172,7 @@ def _flatten_result_block(block: dict[str, Any]) -> str:
     """Render the sandbox's structured result as a single string for the model.
 
     The sandbox returns an Anthropic-shaped tool-result block — see
-    ``infra/sandbox-image/sandbox/models.py``:
+    https://github.com/mozilla-ai/otari-sandbox-container/blob/main/sandbox/models.py:
 
         {
           "type": "code_execution_tool_result"
