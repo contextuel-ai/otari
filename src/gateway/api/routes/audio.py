@@ -20,9 +20,11 @@ from gateway.models.entities import APIKey, UsageLog
 from gateway.rate_limit import check_rate_limit
 from gateway.services.budget_service import validate_user_budget
 from gateway.services.log_writer import LogWriter
-from gateway.services.pricing_service import find_model_pricing
 
 router = APIRouter(prefix="/v1", tags=["audio"])
+
+# Maximum upload size for audio files (25 MB, matching OpenAI's limit)
+_MAX_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024
 
 # Mapping from response_format to MIME type for speech endpoint
 _SPEECH_CONTENT_TYPES: dict[str | None, str] = {
@@ -91,6 +93,11 @@ async def create_transcription(
     provider_kwargs = get_provider_kwargs(config, provider)
 
     file_bytes = await file.read()
+    if len(file_bytes) > _MAX_AUDIO_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Audio file exceeds maximum upload size of {_MAX_AUDIO_UPLOAD_BYTES // (1024 * 1024)} MB",
+        )
 
     transcription_kwargs: dict[str, Any] = {
         "model": model_name,
@@ -124,13 +131,8 @@ async def create_transcription(
             total_tokens=0,
         )
 
-        pricing = await find_model_pricing(db, provider, model_name, as_of=usage_log.timestamp)
-        if pricing:
-            cost = pricing.input_price_per_million
-            usage_log.cost = cost
-        else:
-            model_ref = f"{provider}:{model_name}" if provider else model_name
-            logger.warning("No pricing configured for '%s'. Usage will be tracked without cost.", model_ref)
+        # Audio transcription lacks a measurable usage unit (tokens, seconds, etc.)
+        # so cost is left unset until a dedicated pricing metric is available.
 
         await log_writer.put(usage_log)
 
@@ -175,7 +177,23 @@ class AudioSpeechRequest(BaseModel):
     user: str | None = None
 
 
-@router.post("/audio/speech", response_model=None)
+@router.post(
+    "/audio/speech",
+    response_model=None,
+    responses={
+        200: {
+            "description": "Audio bytes in the requested format",
+            "content": {
+                "audio/mpeg": {"schema": {"type": "string", "format": "binary"}},
+                "audio/opus": {"schema": {"type": "string", "format": "binary"}},
+                "audio/aac": {"schema": {"type": "string", "format": "binary"}},
+                "audio/flac": {"schema": {"type": "string", "format": "binary"}},
+                "audio/wav": {"schema": {"type": "string", "format": "binary"}},
+                "audio/L16": {"schema": {"type": "string", "format": "binary"}},
+            },
+        },
+    },
+)
 async def create_speech(
     raw_request: Request,
     response: Response,
@@ -254,13 +272,8 @@ async def create_speech(
             total_tokens=0,
         )
 
-        pricing = await find_model_pricing(db, provider, model_name, as_of=usage_log.timestamp)
-        if pricing:
-            cost = pricing.input_price_per_million
-            usage_log.cost = cost
-        else:
-            model_ref = f"{provider}:{model_name}" if provider else model_name
-            logger.warning("No pricing configured for '%s'. Usage will be tracked without cost.", model_ref)
+        # Audio speech lacks a measurable usage unit (tokens, seconds, characters, etc.)
+        # so cost is left unset until a dedicated pricing metric is available.
 
         await log_writer.put(usage_log)
 
@@ -285,11 +298,6 @@ async def create_speech(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="The request could not be completed by the provider",
         ) from e
-
-    if rate_limit_info:
-        # StreamingResponse doesn't allow setting headers after creation,
-        # so we include them in the response constructor
-        pass
 
     content_type = _SPEECH_CONTENT_TYPES.get(request.response_format, "audio/mpeg")
 
