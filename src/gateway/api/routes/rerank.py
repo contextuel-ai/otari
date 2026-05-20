@@ -99,10 +99,16 @@ async def create_rerank(
     if request.max_tokens_per_doc is not None:
         rerank_kwargs["max_tokens_per_doc"] = request.max_tokens_per_doc
 
+    if arerank is None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Rerank is not available — the installed any-llm SDK does not include rerank support",
+        )
+
     try:
         result = await arerank(**rerank_kwargs)
 
-        total_tokens = result.usage.total_tokens if result.usage and result.usage.total_tokens else 0
+        total_tokens = result.usage.total_tokens if result.usage else None
 
         usage_log = UsageLog(
             id=str(uuid.uuid4()),
@@ -118,15 +124,15 @@ async def create_rerank(
             total_tokens=total_tokens,
         )
 
-        if total_tokens:
+        if result.usage:
             pricing = await find_model_pricing(db, provider, model, as_of=usage_log.timestamp)
-            if pricing:
+            if pricing and total_tokens:
                 cost = (total_tokens / 1_000_000) * pricing.input_price_per_million
                 usage_log.cost = cost
-            else:
+            elif not pricing:
                 model_ref = f"{provider}:{model}" if provider else model
                 logger.warning(
-                    "No pricing configured for '%s'. Cost will not be tracked for this rerank request.",
+                    "No pricing configured for '%s'. Usage will be tracked without cost.",
                     model_ref,
                 )
 

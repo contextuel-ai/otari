@@ -57,7 +57,7 @@ def _mock_rerank_response() -> _RerankResponse:
 RERANK_PAYLOAD: dict[str, Any] = {
     "model": "cohere:rerank-v3.5",
     "query": "What is the capital of France?",
-    "documents": ["Paris is the capital.", "Berlin is in Germany."],
+    "documents": ["Paris is the capital.", "Berlin is in Germany.", "Madrid is in Spain."],
 }
 
 
