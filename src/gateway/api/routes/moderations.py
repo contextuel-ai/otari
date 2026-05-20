@@ -48,7 +48,7 @@ class ModerationRequest(BaseModel):
     user: str | None = None
 
 
-@router.post("/moderations", response_model=None)
+@router.post("/moderations", response_model=ModerationResponse)
 async def create_moderation(
     raw_request: Request,
     response: Response,
@@ -148,9 +148,15 @@ async def create_moderation(
             error_message=str(e),
         )
         await log_writer.put(error_log)
+        if UNSUPPORTED_MODERATION_SUBSTRING in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            ) from e
+        logger.error("Provider implementation gap for %s:%s: %s", provider, model, e)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The request could not be completed by the provider",
         ) from e
     except Exception as e:
         error_log = UsageLog(

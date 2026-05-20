@@ -1194,6 +1194,90 @@
         "title": "ModerationRequest",
         "type": "object"
       },
+      "ModerationResponse": {
+        "description": "Normalized moderation response across providers.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ModerationResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "model",
+          "results"
+        ],
+        "title": "ModerationResponse",
+        "type": "object"
+      },
+      "ModerationResult": {
+        "description": "A single moderation decision, typically one per input item.",
+        "properties": {
+          "categories": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Categories",
+            "type": "object"
+          },
+          "category_applied_input_types": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Applied Input Types"
+          },
+          "category_scores": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Category Scores",
+            "type": "object"
+          },
+          "flagged": {
+            "title": "Flagged",
+            "type": "boolean"
+          },
+          "provider_raw": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Raw"
+          }
+        },
+        "required": [
+          "flagged"
+        ],
+        "title": "ModerationResult",
+        "type": "object"
+      },
       "PricingResponse": {
         "description": "Response model for model pricing.",
         "properties": {
@@ -3012,7 +3096,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationResponse"
+                }
               }
             },
             "description": "Successful Response"

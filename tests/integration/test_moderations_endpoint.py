@@ -188,6 +188,25 @@ def test_moderations_unsupported_provider_returns_400(
     assert resp.json() == {"detail": "Provider anthropic does not support moderation"}
 
 
+def test_moderations_generic_not_implemented_returns_500(
+    client: TestClient,
+    api_key_header: dict[str, str],
+) -> None:
+    """Generic NotImplementedError (without locked phrasing) returns 500."""
+    with patch(
+        "gateway.api.routes.moderations.amoderation",
+        new_callable=AsyncMock,
+        side_effect=NotImplementedError("some internal implementation gap"),
+    ):
+        resp = client.post(
+            "/v1/moderations",
+            json={"model": "openai:omni-moderation-latest", "input": "hello"},
+            headers=api_key_header,
+        )
+    assert resp.status_code == 500
+    assert "could not be completed" in resp.json()["detail"].lower()
+
+
 def test_moderations_logs_usage(
     client: TestClient,
     master_key_header: dict[str, str],
@@ -213,14 +232,16 @@ def test_moderations_logs_usage(
     usage_resp = client.get(f"/v1/users/{user_id}/usage", headers=master_key_header)
     assert usage_resp.status_code == 200
     logs = usage_resp.json()
-    moderation_logs = [log for log in logs if log["endpoint"] == "/v1/moderations"]
+    moderation_logs = [
+        log for log in logs if log["endpoint"] == "/v1/moderations" and log["status"] == "success"
+    ]
     assert len(moderation_logs) >= 1
-    assert moderation_logs[0]["status"] == "success"
-    assert moderation_logs[0]["prompt_tokens"] is None
-    assert moderation_logs[0]["completion_tokens"] == 0
-    assert moderation_logs[0]["total_tokens"] is None
-    assert moderation_logs[0]["provider"] == "openai"
-    assert moderation_logs[0]["model"] == "omni-moderation-latest"
+    latest = moderation_logs[-1]
+    assert latest["prompt_tokens"] is None
+    assert latest["completion_tokens"] == 0
+    assert latest["total_tokens"] is None
+    assert latest["provider"] == "openai"
+    assert latest["model"] == "omni-moderation-latest"
 
 
 def test_moderations_logs_error_on_failure(
@@ -249,7 +270,7 @@ def test_moderations_logs_error_on_failure(
     logs = usage_resp.json()
     error_logs = [log for log in logs if log["endpoint"] == "/v1/moderations" and log["status"] == "error"]
     assert len(error_logs) >= 1
-    assert "provider down" in error_logs[0]["error_message"]
+    assert "provider down" in error_logs[-1]["error_message"]
 
 
 def test_moderations_include_raw_opts_in(
@@ -319,10 +340,13 @@ def test_moderations_cost_tracked_with_pricing(
 
     usage_resp = client.get(f"/v1/users/{user_id}/usage", headers=master_key_header)
     logs = usage_resp.json()
-    moderation_logs = [log for log in logs if log["endpoint"] == "/v1/moderations"]
+    moderation_logs = [
+        log for log in logs if log["endpoint"] == "/v1/moderations" and log["status"] == "success"
+    ]
     assert len(moderation_logs) >= 1
-    assert moderation_logs[0]["cost"] is not None
-    assert moderation_logs[0]["cost"] > 0
+    latest = moderation_logs[-1]
+    assert latest["cost"] is not None
+    assert latest["cost"] > 0
 
 
 def test_moderations_no_warning_when_pricing_missing(
