@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from gateway.api.routes import (
     audio,
+    batches,
     budgets,
     chat,
     embeddings,
@@ -25,13 +26,14 @@ def register_routers(app: FastAPI, config: GatewayConfig) -> None:
 
     if config.is_platform_mode:
         app.include_router(platform_mode.router)
-        return
+        return  # Remaining routers (including batches) are standalone-mode only
 
     app.include_router(messages.router)
     app.include_router(responses.router)
     app.include_router(embeddings.router)
     app.include_router(images.router)
     app.include_router(audio.router)
+    app.include_router(batches.router)
     app.include_router(models.router)
     app.include_router(keys.router)
     app.include_router(users.router)
