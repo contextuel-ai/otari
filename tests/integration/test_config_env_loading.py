@@ -90,6 +90,21 @@ def test_load_config_platform_env_overrides(tmp_path: Path, monkeypatch: pytest.
     assert config.platform["usage_max_retries"] == 7
 
 
+def test_load_config_sets_default_platform_base_url_when_token_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file = tmp_path / "gateway.yml"
+    config_file.write_text("mode: platform\n", encoding="utf-8")
+
+    monkeypatch.setenv("OTARI_PLATFORM_TOKEN", "gw_test_token")
+    monkeypatch.delenv("PLATFORM_BASE_URL", raising=False)
+
+    config = load_config(str(config_file))
+
+    assert config.is_platform_mode
+    assert config.platform["base_url"] == "https://api.otari.ai/api/v1"
+
+
 def test_load_config_rejects_platform_mode_without_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "gateway.yml"
     config_file.write_text("mode: platform\n", encoding="utf-8")

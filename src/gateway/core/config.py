@@ -11,6 +11,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 API_KEY_HEADER = "Otari-Key"
 LEGACY_API_KEY_HEADERS = ("AnyLLM-Key", "X-AnyLLM-Key")  # Back-compat aliases; prefer API_KEY_HEADER.
+DEFAULT_PLATFORM_BASE_URL = "https://api.otari.ai/api/v1"
+
+
+def _get_platform_token_from_env() -> str | None:
+    token = os.getenv("OTARI_PLATFORM_TOKEN", "").strip()
+    if not token:
+        token = os.getenv("ANY_LLM_PLATFORM_TOKEN", "").strip()
+    return token if token else None
 
 
 class PricingConfig(BaseModel):
@@ -104,10 +112,7 @@ class GatewayConfig(BaseSettings):
 
     @property
     def platform_token(self) -> str | None:
-        token = os.getenv("OTARI_PLATFORM_TOKEN", "").strip()
-        if not token:
-            token = os.getenv("ANY_LLM_PLATFORM_TOKEN", "").strip()
-        return token if token else None
+        return _get_platform_token_from_env()
 
     @property
     def effective_mode(self) -> str:
@@ -184,6 +189,11 @@ def _apply_platform_env_overrides(config: dict[str, Any]) -> None:
         if value is None or value == "":
             continue
         platform[field_name] = caster(value)
+
+    configured_mode = str(config.get("mode", "")).strip().lower()
+    platform_requested = configured_mode == "platform" or _get_platform_token_from_env() is not None
+    if platform_requested and not platform.get("base_url"):
+        platform["base_url"] = DEFAULT_PLATFORM_BASE_URL
 
     if platform:
         config["platform"] = platform

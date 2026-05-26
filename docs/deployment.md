@@ -76,16 +76,16 @@ No `providers` block, no `database_url`, no `master_key`.
 
 ### 2. Set your otari.ai credentials
 
-You need two values from your otari.ai account:
-- Your gateway token
-- The platform base URL
+You need your gateway token from your otari.ai account.
 
 Pass them as environment variables. Create a `.env` file:
 
 ```bash
 OTARI_PLATFORM_TOKEN=gw_your_token_here
-PLATFORM_BASE_URL=https://api.otari.ai/api/v1
 ```
+
+By default, `PLATFORM_BASE_URL` is `https://api.otari.ai/api/v1`.
+Set `PLATFORM_BASE_URL` only if your otari.ai deployment uses a different base URL.
 
 ### 3. Start the gateway
 

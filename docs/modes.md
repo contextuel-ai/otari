@@ -40,8 +40,10 @@ This mode activates automatically when `OTARI_PLATFORM_TOKEN` is set.
 
 ```bash
 export OTARI_PLATFORM_TOKEN=gw_your_token_here
-export PLATFORM_BASE_URL=https://api.otari.ai/api/v1
 ```
+
+`PLATFORM_BASE_URL` defaults to `https://api.otari.ai/api/v1`.
+Set it only if your otari.ai deployment uses a different base URL.
 
 See [Deployment](deployment.md) for the full Docker setup.
 
