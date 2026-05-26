@@ -1721,7 +1721,7 @@ async def _run_streaming_with_fallback(
     backend_stack = AsyncExitStack()
     pool_for_loop: Any = None
     try:
-        if mcp_server_configs is not None:
+        if mcp_server_configs:
             pool_for_loop = await backend_stack.enter_async_context(MCPClientPool(mcp_server_configs))
         elif use_sandbox:
             assert sandbox_url is not None
