@@ -11,6 +11,28 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 API_KEY_HEADER = "Otari-Key"
 LEGACY_API_KEY_HEADERS = ("AnyLLM-Key", "X-AnyLLM-Key")  # Back-compat aliases; prefer API_KEY_HEADER.
+DEFAULT_PLATFORM_BASE_URL = "https://api.otari.ai/api/v1"
+PLATFORM_TOKEN_ENV_VARS = (
+    "OTARI_AI_TOKEN",
+    "OTARI_PLATFORM_TOKEN",
+    "ANY_LLM_PLATFORM_TOKEN",
+)
+OTARI_ENV_ALIASES_TO_GATEWAY = {
+    "OTARI_MASTER_KEY": ("master_key", str),
+    "OTARI_DATABASE_URL": ("database_url", str),
+    "OTARI_HOST": ("host", str),
+    "OTARI_PORT": ("port", int),
+    "OTARI_AUTO_MIGRATE": ("auto_migrate", bool),
+    "OTARI_BOOTSTRAP_API_KEY": ("bootstrap_api_key", bool),
+}
+
+
+def _get_platform_token_from_env() -> str | None:
+    for env_var in PLATFORM_TOKEN_ENV_VARS:
+        token = os.getenv(env_var, "").strip()
+        if token:
+            return token
+    return None
 
 
 class PricingConfig(BaseModel):
@@ -104,10 +126,7 @@ class GatewayConfig(BaseSettings):
 
     @property
     def platform_token(self) -> str | None:
-        token = os.getenv("OTARI_PLATFORM_TOKEN", "").strip()
-        if not token:
-            token = os.getenv("ANY_LLM_PLATFORM_TOKEN", "").strip()
-        return token if token else None
+        return _get_platform_token_from_env()
 
     @property
     def effective_mode(self) -> str:
@@ -127,7 +146,10 @@ class GatewayConfig(BaseSettings):
 
         token_present = self.platform_token is not None
         if configured_mode == "platform" and not token_present:
-            msg = "GATEWAY_MODE=platform requires OTARI_PLATFORM_TOKEN to be set."
+            msg = (
+                "GATEWAY_MODE=platform requires OTARI_AI_TOKEN to be set "
+                "(legacy aliases: OTARI_PLATFORM_TOKEN, ANY_LLM_PLATFORM_TOKEN)."
+            )
             raise ValueError(msg)
 
 
@@ -151,11 +173,33 @@ def load_config(config_path: str | None = None) -> GatewayConfig:
             if yaml_config:
                 config_dict = _resolve_env_vars(yaml_config)
 
+    _apply_otari_env_overrides(config_dict)
     _apply_platform_env_overrides(config_dict)
 
     config = GatewayConfig(**config_dict)
     config.validate_mode_selection()
     return config
+
+
+def _parse_bool_env(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    msg = f"Invalid boolean value for environment variable: {value!r}"
+    raise ValueError(msg)
+
+
+def _apply_otari_env_overrides(config: dict[str, Any]) -> None:
+    for env_name, (field_name, caster) in OTARI_ENV_ALIASES_TO_GATEWAY.items():
+        value = os.getenv(env_name)
+        if value is None or value == "":
+            continue
+        if caster is bool:
+            config[field_name] = _parse_bool_env(value)
+        else:
+            config[field_name] = caster(value)
 
 
 def _apply_platform_env_overrides(config: dict[str, Any]) -> None:
@@ -184,6 +228,11 @@ def _apply_platform_env_overrides(config: dict[str, Any]) -> None:
         if value is None or value == "":
             continue
         platform[field_name] = caster(value)
+
+    configured_mode = str(config.get("mode", "")).strip().lower()
+    platform_requested = configured_mode == "platform" or _get_platform_token_from_env() is not None
+    if platform_requested and not platform.get("base_url"):
+        platform["base_url"] = DEFAULT_PLATFORM_BASE_URL
 
     if platform:
         config["platform"] = platform

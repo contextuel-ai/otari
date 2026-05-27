@@ -1,6 +1,6 @@
 # Platform protocol
 
-When the gateway runs in **platform mode** (`OTARI_PLATFORM_TOKEN` is set), it
+When the gateway runs in **platform mode** (`OTARI_AI_TOKEN` is set), it
 delegates per-request authorization and provider-credential resolution to a
 peer platform service over HTTP. This document describes the wire contract
 the gateway expects from that peer.
@@ -10,14 +10,14 @@ but any service that implements this contract can stand in.
 
 ## Endpoints
 
-The gateway calls two endpoints, both rooted at `PLATFORM_BASE_URL`:
+The gateway calls two endpoints, both rooted at the configured platform base URL:
 
 | Endpoint | Purpose |
 |---|---|
 | `POST {base}/gateway/provider-keys/resolve` | Authorize a request and return one or more provider credentials to try |
 | `POST {base}/gateway/usage`                 | Report the outcome of an attempt back to the platform |
 
-`{base}` here means whatever you set `PLATFORM_BASE_URL` to — the gateway concatenates literally. The peer service is responsible for including any API-version prefix it exposes its own routes under. For the reference any-llm-platform deployment that prefix is `/api/v1`, so `PLATFORM_BASE_URL` is set to `http://backend:8000/api/v1` and the gateway ends up POSTing to `http://backend:8000/api/v1/gateway/provider-keys/resolve`.
+`{base}` means the gateway platform `base_url` setting. The gateway concatenates literally. The peer service is responsible for including any API-version prefix it exposes its own routes under. For the reference otari deployment that prefix is `/api/v1`, so the base URL is `http://backend:8000/api/v1` and the gateway ends up POSTing to `http://backend:8000/api/v1/gateway/provider-keys/resolve`.
 
 ## Authentication
 
@@ -89,10 +89,9 @@ own behaviour.
 `attempts` MUST contain at least one entry. An empty list is treated as a
 platform bug and surfaced as `502 Bad Gateway`.
 
-### Response — legacy single-attempt shape
+### Response — single-attempt shape
 
-For backwards compatibility with older platform deployments, the gateway also
-accepts a flat payload:
+The gateway also accepts a flat payload:
 
 ```json
 {
@@ -211,8 +210,7 @@ flag.
 
 | Env var | Default | Notes |
 |---|---|---|
-| `OTARI_PLATFORM_TOKEN` | — | Setting this enables platform mode. Legacy alias: `ANY_LLM_PLATFORM_TOKEN`. |
-| `PLATFORM_BASE_URL` | — | Required in platform mode. The gateway POSTs to `{base}/gateway/...`. |
+| `OTARI_AI_TOKEN` | — | Setting this enables platform mode. |
 | `PLATFORM_RESOLVE_TIMEOUT_MS` | `5000` | Per-resolve timeout. |
 | `PLATFORM_USAGE_TIMEOUT_MS` | `5000` | Per-usage-report timeout. |
 | `PLATFORM_USAGE_MAX_RETRIES` | `3` | Max retries for transient usage-report failures. |

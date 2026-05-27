@@ -9,10 +9,11 @@ from gateway.core.config import load_config
 
 def test_load_config_loads_provider_env_vars_from_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("ANTHROPIC_API_KEY=from-dotenv\nGATEWAY_MASTER_KEY=gateway-master\n", encoding="utf-8")
+    env_file.write_text("ANTHROPIC_API_KEY=from-dotenv\nOTARI_MASTER_KEY=gateway-master\n", encoding="utf-8")
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OTARI_MASTER_KEY", raising=False)
     monkeypatch.delenv("GATEWAY_MASTER_KEY", raising=False)
 
     config = load_config()
@@ -52,7 +53,7 @@ def test_load_config_prefers_dotenv_near_config_file(tmp_path: Path, monkeypatch
 
 def test_load_config_skips_duplicate_dotenv_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("GATEWAY_MASTER_KEY=gateway-master\n", encoding="utf-8")
+    env_file.write_text("OTARI_MASTER_KEY=gateway-master\n", encoding="utf-8")
     config_file = tmp_path / "gateway.yml"
     config_file.write_text("{}\n", encoding="utf-8")
 
@@ -71,11 +72,46 @@ def test_load_config_skips_duplicate_dotenv_paths(tmp_path: Path, monkeypatch: p
     assert calls == [env_file]
 
 
+def test_load_config_reads_otari_prefixed_env_aliases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_file = tmp_path / "gateway.yml"
+    config_file.write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setenv("OTARI_MASTER_KEY", "otari-master")
+    monkeypatch.setenv("OTARI_DATABASE_URL", "sqlite:///./otari.db")
+    monkeypatch.setenv("OTARI_HOST", "127.0.0.1")
+    monkeypatch.setenv("OTARI_PORT", "9001")
+    monkeypatch.setenv("OTARI_AUTO_MIGRATE", "false")
+    monkeypatch.setenv("OTARI_BOOTSTRAP_API_KEY", "false")
+
+    config = load_config(str(config_file))
+
+    assert config.master_key == "otari-master"
+    assert config.database_url == "sqlite:///./otari.db"
+    assert config.host == "127.0.0.1"
+    assert config.port == 9001
+    assert config.auto_migrate is False
+    assert config.bootstrap_api_key is False
+
+
+def test_load_config_prefers_otari_prefix_over_gateway_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file = tmp_path / "gateway.yml"
+    config_file.write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setenv("OTARI_PORT", "9001")
+    monkeypatch.setenv("GATEWAY_PORT", "7000")
+
+    config = load_config(str(config_file))
+
+    assert config.port == 9001
+
+
 def test_load_config_platform_env_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "gateway.yml"
     config_file.write_text("mode: platform\n", encoding="utf-8")
 
-    monkeypatch.setenv("OTARI_PLATFORM_TOKEN", "gw_test_token")
+    monkeypatch.setenv("OTARI_AI_TOKEN", "gw_test_token")
     monkeypatch.setenv("PLATFORM_BASE_URL", "http://localhost:8100/api/v1")
     monkeypatch.setenv("PLATFORM_RESOLVE_TIMEOUT_MS", "1234")
     monkeypatch.setenv("PLATFORM_USAGE_TIMEOUT_MS", "2345")
@@ -90,22 +126,66 @@ def test_load_config_platform_env_overrides(tmp_path: Path, monkeypatch: pytest.
     assert config.platform["usage_max_retries"] == 7
 
 
+def test_load_config_sets_default_platform_base_url_when_token_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file = tmp_path / "gateway.yml"
+    config_file.write_text("mode: platform\n", encoding="utf-8")
+
+    monkeypatch.setenv("OTARI_AI_TOKEN", "gw_test_token")
+    monkeypatch.delenv("PLATFORM_BASE_URL", raising=False)
+
+    config = load_config(str(config_file))
+
+    assert config.is_platform_mode
+    assert config.platform["base_url"] == "https://api.otari.ai/api/v1"
+
+
 def test_load_config_rejects_platform_mode_without_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "gateway.yml"
     config_file.write_text("mode: platform\n", encoding="utf-8")
+    monkeypatch.delenv("OTARI_AI_TOKEN", raising=False)
     monkeypatch.delenv("OTARI_PLATFORM_TOKEN", raising=False)
     monkeypatch.delenv("ANY_LLM_PLATFORM_TOKEN", raising=False)
 
-    with pytest.raises(ValueError, match="OTARI_PLATFORM_TOKEN"):
+    with pytest.raises(ValueError, match="OTARI_AI_TOKEN"):
         load_config(str(config_file))
 
 
 def test_load_config_prefers_platform_mode_when_token_is_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "gateway.yml"
     config_file.write_text("mode: standalone\n", encoding="utf-8")
-    monkeypatch.setenv("OTARI_PLATFORM_TOKEN", "gw_test_token")
+    monkeypatch.setenv("OTARI_AI_TOKEN", "gw_test_token")
 
     config = load_config(str(config_file))
 
     assert config.mode == "standalone"
     assert config.is_platform_mode
+
+
+def test_load_config_accepts_legacy_platform_token_aliases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_file = tmp_path / "gateway.yml"
+    config_file.write_text("mode: standalone\n", encoding="utf-8")
+
+    monkeypatch.setenv("OTARI_PLATFORM_TOKEN", "legacy-token")
+
+    config = load_config(str(config_file))
+
+    assert config.is_platform_mode
+    assert config.platform_token == "legacy-token"
+
+
+def test_load_config_prefers_otari_ai_token_over_legacy_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file = tmp_path / "gateway.yml"
+    config_file.write_text("mode: standalone\n", encoding="utf-8")
+
+    monkeypatch.setenv("OTARI_AI_TOKEN", "new-token")
+    monkeypatch.setenv("OTARI_PLATFORM_TOKEN", "old-token")
+    monkeypatch.setenv("ANY_LLM_PLATFORM_TOKEN", "older-token")
+
+    config = load_config(str(config_file))
+
+    assert config.is_platform_mode
+    assert config.platform_token == "new-token"
