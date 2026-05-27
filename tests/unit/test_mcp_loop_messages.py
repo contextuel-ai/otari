@@ -397,6 +397,97 @@ async def test_loop_exits_when_stop_reason_isnt_tool_use_even_with_tool_use_bloc
     assert pool.calls == []  # never executed
 
 
+# ---------- on_first_response (lock-in callback) ----------
+
+
+@pytest.mark.asyncio
+async def test_loop_fires_on_first_response_after_first_amessages_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``on_first_response`` is invoked exactly once, right after the first
+    upstream call returns successfully.
+    """
+    responses = iter(
+        [
+            _message_response(stop_reason="tool_use", content=[_tool_use("tu_1", "fetch_url", {})]),
+            _message_response(stop_reason="end_turn", content=[_text_block("done")]),
+        ]
+    )
+    fire_order: list[str] = []
+
+    async def fake_amessages(**kwargs: Any) -> MessageResponse:
+        fire_order.append("amessages")
+        return next(responses)
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+
+    def _on_first() -> None:
+        fire_order.append("on_first_response")
+
+    await anthropic_tool_loop(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "go"}], "max_tokens": 100},
+        pool=cast(Any, _FakePool(tool_names=["fetch_url"])),
+        max_iterations=5,
+        on_first_response=_on_first,
+    )
+    # Fires after the first amessages but before any tool-loop continuation.
+    assert fire_order[0] == "amessages"
+    assert fire_order[1] == "on_first_response"
+    # Only ever fires once, even across multiple iterations.
+    assert fire_order.count("on_first_response") == 1
+
+
+@pytest.mark.asyncio
+async def test_loop_does_not_fire_on_first_response_when_initial_call_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the first ``amessages`` call raises before returning, the callback
+    must not fire — callers depend on that to know whether the attempt locked
+    in (and therefore can or can't fall through to a fallback provider).
+    """
+    fired = False
+
+    async def fake_amessages(**kwargs: Any) -> MessageResponse:
+        raise RuntimeError("upstream 500")
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+
+    def _on_first() -> None:
+        nonlocal fired
+        fired = True
+
+    with pytest.raises(RuntimeError, match="upstream 500"):
+        await anthropic_tool_loop(
+            completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "go"}], "max_tokens": 100},
+            pool=cast(Any, _FakePool(tool_names=["fetch_url"])),
+            max_iterations=5,
+            on_first_response=_on_first,
+        )
+    assert fired is False
+
+
+@pytest.mark.asyncio
+async def test_loop_is_backward_compatible_without_on_first_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The callback is optional — callers that don't need lock-in (standalone
+    mode) can omit it without changing behavior.
+    """
+
+    async def fake_amessages(**kwargs: Any) -> MessageResponse:
+        return _message_response(stop_reason="end_turn", content=[_text_block("hi")])
+
+    monkeypatch.setattr(messages_loop_module, "amessages", fake_amessages)
+
+    out = await anthropic_tool_loop(
+        completion_kwargs={"model": "fake", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+        pool=cast(Any, _FakePool(tool_names=["fetch_url"])),
+        max_iterations=5,
+    )
+    assert isinstance(out.content[0], TextBlock)
+    assert out.content[0].text == "hi"
+
+
 # ---------- streaming loop ----------
 
 

@@ -12,7 +12,7 @@ The duck-typed pool interface (``owns_tool`` / ``call_tool`` /
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
 
 from any_llm import amessages
@@ -113,6 +113,7 @@ async def anthropic_tool_loop(
     completion_kwargs: dict[str, Any],
     pool: MCPClientPool,
     max_iterations: int,
+    on_first_response: Callable[[], None] | None = None,
 ) -> MessageResponse:
     """Non-streaming Anthropic Messages tool-use loop.
 
@@ -130,6 +131,13 @@ async def anthropic_tool_loop(
         the caller only sees what it can dispatch.
 
     Accumulates usage across iterations into the returned ``MessageResponse``.
+
+    ``on_first_response`` is invoked exactly once, right after the first
+    upstream ``amessages`` call returns successfully. Mirrors the contract on
+    :func:`gateway.services.mcp_loop.mcp_tool_loop` so platform-mode callers
+    can lock in to the chosen provider — once the model has produced any
+    assistant content, the conversation state is provider-specific and
+    subsequent failures must not silently swap providers.
     """
     messages = list(completion_kwargs.get("messages") or [])
     user_tools = list(completion_kwargs.get("tools") or [])
@@ -139,6 +147,7 @@ async def anthropic_tool_loop(
 
     acc_input = 0
     acc_output = 0
+    first_response_signaled = False
 
     for _ in range(max_iterations):
         kwargs: dict[str, Any] = {**base, "messages": messages, "stream": False}
@@ -146,6 +155,10 @@ async def anthropic_tool_loop(
             kwargs["tools"] = merged_tools
 
         result: MessageResponse = await amessages(**kwargs)  # type: ignore[assignment]
+        if not first_response_signaled:
+            first_response_signaled = True
+            if on_first_response is not None:
+                on_first_response()
         if result.usage:
             acc_input += result.usage.input_tokens or 0
             acc_output += result.usage.output_tokens or 0
