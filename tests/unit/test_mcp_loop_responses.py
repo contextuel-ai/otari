@@ -394,6 +394,90 @@ async def test_loop_coerces_string_input_into_list(monkeypatch: pytest.MonkeyPat
     assert len(captured_inputs[1]) > len(captured_inputs[0])
 
 
+# ---------- on_first_response (lock-in callback) ----------
+
+
+@pytest.mark.asyncio
+async def test_loop_fires_on_first_response_after_first_aresponses_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``on_first_response`` is invoked exactly once, right after the first
+    upstream call returns successfully.
+    """
+    responses = iter(
+        [
+            _response(output=[_function_call("c1", "fetch_url", "{}")]),
+            _response(output=[], status="completed"),
+        ]
+    )
+    fire_order: list[str] = []
+
+    async def fake_aresponses(**kwargs: Any) -> Response:
+        fire_order.append("aresponses")
+        return next(responses)
+
+    monkeypatch.setattr(responses_loop_module, "aresponses", fake_aresponses)
+
+    def _on_first() -> None:
+        fire_order.append("on_first_response")
+
+    await responses_tool_loop(
+        completion_kwargs={"model": "fake", "input_data": "go"},
+        pool=cast(Any, _FakePool(tool_names=["fetch_url"])),
+        max_iterations=5,
+        on_first_response=_on_first,
+    )
+    assert fire_order[0] == "aresponses"
+    assert fire_order[1] == "on_first_response"
+    assert fire_order.count("on_first_response") == 1
+
+
+@pytest.mark.asyncio
+async def test_loop_does_not_fire_on_first_response_when_initial_call_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fired = False
+
+    async def fake_aresponses(**kwargs: Any) -> Response:
+        raise RuntimeError("upstream 500")
+
+    monkeypatch.setattr(responses_loop_module, "aresponses", fake_aresponses)
+
+    def _on_first() -> None:
+        nonlocal fired
+        fired = True
+
+    with pytest.raises(RuntimeError, match="upstream 500"):
+        await responses_tool_loop(
+            completion_kwargs={"model": "fake", "input_data": "go"},
+            pool=cast(Any, _FakePool(tool_names=["fetch_url"])),
+            max_iterations=5,
+            on_first_response=_on_first,
+        )
+    assert fired is False
+
+
+@pytest.mark.asyncio
+async def test_loop_is_backward_compatible_without_on_first_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The callback is optional — callers that don't need lock-in (standalone
+    mode) can omit it without changing behavior.
+    """
+
+    async def fake_aresponses(**kwargs: Any) -> Response:
+        return _response(output=[], status="completed")
+
+    monkeypatch.setattr(responses_loop_module, "aresponses", fake_aresponses)
+
+    out = await responses_tool_loop(
+        completion_kwargs={"model": "fake", "input_data": "hi"},
+        pool=cast(Any, _FakePool(tool_names=[])),
+        max_iterations=5,
+    )
+    assert out.status == "completed"
+
+
 # ---------- streaming loop ----------
 
 

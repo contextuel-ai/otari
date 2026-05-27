@@ -20,7 +20,7 @@ execution path and the gateway has nothing to dispatch against.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
 
 from any_llm import aresponses
@@ -129,6 +129,7 @@ async def responses_tool_loop(
     completion_kwargs: dict[str, Any],
     pool: MCPClientPool,
     max_iterations: int,
+    on_first_response: Callable[[], None] | None = None,
 ) -> Response:
     """Non-streaming OpenAI Responses tool-use loop.
 
@@ -145,6 +146,14 @@ async def responses_tool_loop(
 
     Accumulates ``input_tokens`` / ``output_tokens`` / ``total_tokens`` across
     iterations into the returned ``Response``.
+
+    ``on_first_response`` is invoked exactly once, right after the first
+    upstream ``aresponses`` call returns successfully. Mirrors the contract
+    on :func:`gateway.services.mcp_loop.mcp_tool_loop` so platform-mode
+    callers can lock in to the chosen provider once an assistant turn has
+    materialized — subsequent failures terminate the request instead of
+    silently swapping providers (a Responses transcript carries
+    provider-specific call_ids and reasoning items that can't be replayed).
     """
     input_items = _coerce_input_to_list(completion_kwargs.get("input_data"))
     user_tools = list(completion_kwargs.get("tools") or [])
@@ -155,6 +164,7 @@ async def responses_tool_loop(
     acc_input = 0
     acc_output = 0
     acc_total = 0
+    first_response_signaled = False
 
     for _ in range(max_iterations):
         kwargs: dict[str, Any] = {**base, "input_data": input_items, "stream": False}
@@ -162,6 +172,10 @@ async def responses_tool_loop(
             kwargs["tools"] = merged_tools
 
         result: Response = await aresponses(**kwargs)  # type: ignore[assignment]
+        if not first_response_signaled:
+            first_response_signaled = True
+            if on_first_response is not None:
+                on_first_response()
         if result.usage:
             acc_input += result.usage.input_tokens or 0
             acc_output += result.usage.output_tokens or 0
