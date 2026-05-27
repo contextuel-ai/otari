@@ -98,7 +98,7 @@ Both helpers live alongside the existing one in `mcp_loop.py` (or `tool_format.p
 
 Refactor `create_message` to mirror `routes/chat.py:855-960` (tool extraction) and `:1409-1462` (non-stream dispatch) / `:945` (stream dispatch via `_run_streaming_with_fallback`):
 
-- Extract `MessagesRequest.tools` for `code_execution_*` and `web_search_*` types using the existing `_extract_code_execution_tool` / `_extract_web_search_tool` helpers (already format-agnostic — they only look at the `type` string). Move them to a shared `chat_tools.py` if they currently live in `chat.py`. Also recognize `mcp_servers` if/when MessagesRequest grows that field — for the first cut, gate it behind a `mcp_servers: list[dict[str, Any]] | None = None` addition to the pydantic model so Anthropic's native shape stays valid.
+- Extract `MessagesRequest.tools` for `code_execution_*` and `web_search_*` types using the existing `_extract_code_execution_tool` / `_extract_web_search_tool` helpers (already format-agnostic — they only look at the `type` string). Move them to a shared `_tools.py` if they currently live in `chat.py`. Also recognize `mcp_servers` if/when MessagesRequest grows that field — for the first cut, gate it behind a `mcp_servers: list[dict[str, Any]] | None = None` addition to the pydantic model so Anthropic's native shape stays valid.
 - Build the backend (`MCPClientPool` / `SandboxBackend` / `_build_web_search_backend`) using the same `async with` pattern.
 - Convert the pool's `openai_tools` via `openai_to_anthropic_tools`, set `call_kwargs["tools"]` to the result (leaving any user-supplied function tools merged in if applicable — match chat.py's behavior in `_strip_gateway_fields`).
 - Call `anthropic_tool_loop(...)` (non-stream) or `anthropic_tool_loop_stream(...)` (stream) where the current `amessages(...)` calls are.
@@ -126,7 +126,7 @@ Provider resolution for the new endpoints reuses whatever chat.py uses today (lo
 **Edit:**
 - `src/gateway/api/routes/messages.py` — wire tool extraction + native loops + platform routing.
 - `src/gateway/api/routes/responses.py` — same.
-- `src/gateway/api/routes/chat.py` — extract shared helpers (tool extraction, platform attempts) so messages/responses can import them without circular deps. Move `_extract_code_execution_tool`, `_extract_web_search_tool`, `_is_*_tool_type` to `chat_tools.py` (new) or `_helpers.py`.
+- `src/gateway/api/routes/chat.py` — extract shared helpers (tool extraction, platform attempts) so messages/responses can import them without circular deps. Move `_extract_code_execution_tool`, `_extract_web_search_tool`, `_is_*_tool_type` to `_tools.py` (new).
 
 **New:**
 - `src/gateway/services/mcp_loop_messages.py`

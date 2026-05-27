@@ -91,7 +91,22 @@ async def run_platform_attempts(
     If every attempt fails the runner raises 504 (on timeout) or 502
     (otherwise), with the detail string distinguishing single-attempt from
     multi-attempt outcomes.
+
+    Callers are expected to hand a non-empty ``attempts`` list — the platform
+    resolve endpoint guarantees one. Passing an empty list is a caller
+    programming error (the route handler should have raised 502 with
+    "no resolvable provider" already); the runner surfaces it as a 500 so the
+    bug doesn't masquerade as an "all upstream providers failed" message.
     """
+    if not attempts:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Internal error: run_platform_attempts received an empty attempts list — "
+                "the caller should have raised a 502 'no resolvable provider' before reaching the runner"
+            ),
+        )
+
     failures: list[_AttemptFailure] = []
     last_exc: BaseException | None = None
 
