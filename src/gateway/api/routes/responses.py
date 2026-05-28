@@ -856,6 +856,30 @@ async def _stream_responses(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="web_search backend unreachable — check GATEWAY_WEB_SEARCH_URL",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # A provider error raised before the stream starts (e.g. auth failure,
+        # 5xx, connection error) must surface as a 502 HTTP error rather than
+        # escaping uncaught into a 500. Matches the non-streaming handler and
+        # the pre-existing behavior before streaming was factored into this
+        # helper.
+        if db is not None:
+            await log_usage(
+                db=db,
+                log_writer=log_writer,
+                api_key_id=api_key_id,
+                model=model,
+                provider=provider,
+                endpoint="/v1/responses",
+                user_id=user_id,
+                error=str(exc),
+            )
+        logger.error("Provider call failed for %s:%s: %s", provider, model, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="LLM provider error",
+        ) from exc
 
     headers: dict[str, str] = {}
     if rate_limit_info:

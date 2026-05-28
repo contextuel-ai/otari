@@ -855,6 +855,29 @@ async def _stream_messages(
             "web_search backend unreachable — check GATEWAY_WEB_SEARCH_URL",
             status.HTTP_502_BAD_GATEWAY,
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # A provider error raised before the stream starts must surface as an
+        # HTTP error (Anthropic envelope) rather than escaping uncaught into a
+        # 500. Matches the non-streaming handler.
+        if db is not None:
+            await log_usage(
+                db=db,
+                log_writer=log_writer,
+                api_key_id=api_key_id,
+                model=model,
+                provider=provider,
+                endpoint="/v1/messages",
+                user_id=user_id,
+                error=str(exc),
+            )
+        logger.error("Provider call failed for %s:%s: %s", provider, model, exc)
+        raise _anthropic_error(
+            _ERR_API,
+            _PROVIDER_ERROR,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from exc
 
     headers: dict[str, str] = {}
     if rate_limit_info:
