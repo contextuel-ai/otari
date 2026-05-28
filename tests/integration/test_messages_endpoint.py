@@ -181,6 +181,35 @@ def test_messages_endpoint_provider_error_format(
     assert detail["error"]["type"] == "api_error"
 
 
+def test_messages_endpoint_provider_error_streaming(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    test_user: dict[str, Any],
+    messages_request_body: dict[str, Any],
+) -> None:
+    """Provider errors raised before the stream starts return an HTTP error
+    in Anthropic format, not an uncaught 500 leaking into the SSE channel.
+    """
+    messages_request_body["metadata"] = {"user_id": "test-user"}
+    messages_request_body["stream"] = True
+
+    with patch(
+        "gateway.api.routes.messages.amessages",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("Provider unavailable"),
+    ):
+        response = client.post(
+            "/v1/messages",
+            json=messages_request_body,
+            headers=master_key_header,
+        )
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["type"] == "error"
+    assert detail["error"]["type"] == "api_error"
+
+
 def test_messages_endpoint_bearer_auth(
     client: TestClient,
     api_key_obj: dict[str, Any],

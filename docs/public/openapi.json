@@ -949,7 +949,7 @@
         "type": "object"
       },
       "MessagesRequest": {
-        "description": "Anthropic Messages API-compatible request.",
+        "description": "Anthropic Messages API-compatible request.\n\nGateway-internal fields (``mcp_servers``, ``mcp_server_ids``,\n``tools_header``, ``max_tool_iterations``) opt the request into\ngateway-managed MCP / sandbox / web_search without changing the upstream\nwire shape. They're stripped before the request is forwarded.",
         "properties": {
           "cache_control": {
             "anyOf": [
@@ -966,6 +966,48 @@
           "max_tokens": {
             "title": "Max Tokens",
             "type": "integer"
+          },
+          "max_tool_iterations": {
+            "anyOf": [
+              {
+                "maximum": 25.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tool Iterations"
+          },
+          "mcp_server_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Server Ids"
+          },
+          "mcp_servers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/McpServerConfig"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Servers"
           },
           "messages": {
             "items": {
@@ -1078,6 +1120,17 @@
               }
             ],
             "title": "Tools"
+          },
+          "tools_header": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tools Header"
           },
           "top_k": {
             "anyOf": [
@@ -1432,10 +1485,52 @@
       },
       "ResponsesRequest": {
         "additionalProperties": true,
-        "description": "OpenAI Responses API-compatible request.",
+        "description": "OpenAI Responses API-compatible request.\n\nGateway-internal fields (``mcp_servers``, ``mcp_server_ids``,\n``tools_header``, ``max_tool_iterations``) opt the request into\ngateway-managed MCP / sandbox / web_search without changing the upstream\nwire shape. They're stripped before the request is forwarded.",
         "properties": {
           "input": {
             "title": "Input"
+          },
+          "max_tool_iterations": {
+            "anyOf": [
+              {
+                "maximum": 25.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tool Iterations"
+          },
+          "mcp_server_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Server Ids"
+          },
+          "mcp_servers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/McpServerConfig"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Servers"
           },
           "model": {
             "title": "Model",
@@ -1445,6 +1540,32 @@
             "default": false,
             "title": "Stream",
             "type": "boolean"
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tools"
+          },
+          "tools_header": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tools Header"
           },
           "user": {
             "anyOf": [
@@ -3076,7 +3197,7 @@
     },
     "/v1/messages": {
       "post": {
-        "description": "Anthropic Messages API-compatible endpoint.",
+        "description": "Anthropic Messages API-compatible endpoint.\n\nSupports MCP tool-use loops, sandboxed code execution, and SearXNG\nweb_search in both standalone mode and platform mode. Platform-mode\nrequests resolve credentials via the platform service and (for\nnon-tool-loop requests) get multi-attempt fallback across the resolved\nroute. Tool-loop requests collapse to a single attempt \u2014 once\n``on_first_response`` lock-in plumbing lands across the codebase, a\nfollow-up will enable pre-lock-in fallback for tool-loop requests too.",
         "operationId": "create_message_v1_messages_post",
         "requestBody": {
           "content": {
@@ -3568,7 +3689,7 @@
     },
     "/v1/responses": {
       "post": {
-        "description": "OpenAI-compatible Responses endpoint.",
+        "description": "OpenAI-compatible Responses endpoint.\n\nSupports MCP tool-use loops, sandboxed code execution, and SearXNG\nweb_search in both standalone mode and platform mode. Platform-mode\nrequests resolve credentials via the platform service and (for\nnon-tool-loop requests) get multi-attempt fallback across the resolved\nroute. Tool-loop requests collapse to a single attempt \u2014 once\n``on_first_response`` lock-in plumbing lands across the codebase, a\nfollow-up will enable pre-lock-in fallback for tool-loop requests too.",
         "operationId": "create_response_v1_responses_post",
         "requestBody": {
           "content": {
