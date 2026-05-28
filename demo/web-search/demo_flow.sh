@@ -17,6 +17,8 @@
 #   ./demo_flow.sh                                  # runs every provider that has credentials
 #   ./demo_flow.sh --anthropic                      # subset of providers, in the given order
 #   ./demo_flow.sh --openai --llamafile             # multiple flags compose
+#   ./demo_flow.sh --brave                          # label+verify a Brave-backed run
+#                                                   # (bring the stack up with ./start.sh --brave first)
 #
 # Provider preconditions (the script checks each before running):
 #   --anthropic   needs ANTHROPIC_API_KEY in .env
@@ -106,11 +108,13 @@ EOF
 
 # Provider selection ────────────────────────────────────────────────────────
 PROVIDERS=()
+USE_BRAVE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --anthropic) PROVIDERS+=("anthropic"); shift ;;
     --openai)    PROVIDERS+=("openai");    shift ;;
     --llamafile) PROVIDERS+=("llamafile"); shift ;;
+    --brave)     USE_BRAVE=1;              shift ;;
     -h|--help)
       awk 'NR==1 && /^#!/ {next} /^$/ {exit} /^# ?/ {sub(/^# ?/, ""); print}' "$0"
       exit 0
@@ -118,6 +122,20 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
+
+# --brave only labels the run and asserts the gateway is actually pointed at
+# the Brave adapter — the deployment switch lives in ./start.sh --brave. Fail
+# loudly if the stack isn't brave-configured so the narration can't lie.
+if [[ "$USE_BRAVE" == "1" ]]; then
+  _gw=$(cd "$GATEWAY_ROOT" && docker compose ps -q gateway 2>/dev/null | head -1 || true)
+  _gw_url=$(docker inspect "$_gw" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+            | grep '^GATEWAY_WEB_SEARCH_URL=' | cut -d= -f2- || true)
+  if [[ "$_gw_url" != *brave-adapter* ]]; then
+    echo "${RED}--brave: the gateway is not using the Brave adapter (GATEWAY_WEB_SEARCH_URL=${_gw_url:-unset}).${RST}" >&2
+    echo "${YEL}Bring the stack up with the Brave backend first:  ./start.sh --brave${RST}" >&2
+    exit 1
+  fi
+fi
 # Default: all providers, in a stable order.
 if [[ ${#PROVIDERS[@]} -eq 0 ]]; then
   PROVIDERS=(anthropic openai llamafile)
@@ -421,10 +439,18 @@ pause
 # ───────────────────────────────────────────────────────────────────────
 # Scenario 1: gateway-managed web search (otari_web_search).
 N=${#ENABLED[@]}
-present "1) Gateway-managed web search — ${N} provider$( [[ $N -gt 1 ]] && echo s )" \
-        "Every provider uses the SAME keyword (otari_web_search) and the SAME" \
-        "SearXNG instance — identical results regardless of which model ran." \
-        "Watch the 'searxng saw' lines: the gateway's backend does the work."
+if [[ "$USE_BRAVE" == "1" ]]; then
+  present "1) Gateway-managed web search (Brave) — ${N} provider$( [[ $N -gt 1 ]] && echo s )" \
+          "Every provider uses the SAME keyword (otari_web_search). The gateway" \
+          "runs the search via the Brave Search API adapter — reliable results," \
+          "no engine rate-limiting." \
+          "Watch the 'brave-adapter saw' lines: the adapter does the work."
+else
+  present "1) Gateway-managed web search — ${N} provider$( [[ $N -gt 1 ]] && echo s )" \
+          "Every provider uses the SAME keyword (otari_web_search) and the SAME" \
+          "SearXNG instance — identical results regardless of which model ran." \
+          "Watch the 'searxng saw' lines: the gateway's backend does the work."
+fi
 for p in "${ENABLED[@]}"; do
   if ! model=$(provider_model "$p"); then
     echo "${YEL}── $p ── skipped (couldn't resolve a model id)${RST}"
