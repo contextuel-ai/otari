@@ -6,12 +6,12 @@ Chat-Completions, Anthropic Messages, and OpenAI Responses endpoints so
 ``otari_code_execution`` / ``otari_web_search`` requests get identical
 handling regardless of wire shape.
 
-Only the explicit ``otari_*`` tool types trigger gateway-side execution. The
-provider-named keywords (``code_execution`` / ``code_interpreter`` /
-``code_execution_<date>`` / ``web_search`` / ``web_search_<date>``) are left
-untouched in ``tools[]`` and forwarded to the upstream provider, which runs
-them server-side. The keyword alone says who runs the code — no flag, no env
-toggle.
+Only the explicit ``otari_*`` tool types trigger gateway-side execution.
+Every other tool type — the legacy gateway short forms (``code_execution`` /
+``web_search``) and the provider-native keywords (``code_interpreter`` /
+``code_execution_<date>`` / ``web_search_<date>``) — is left untouched in
+``tools[]`` and forwarded to the upstream provider, which runs it server-side.
+The keyword alone says who runs the code — no flag, no env toggle.
 """
 
 from __future__ import annotations

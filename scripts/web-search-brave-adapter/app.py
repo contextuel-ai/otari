@@ -46,7 +46,7 @@ async def search(q: str = Query(..., min_length=1)) -> JSONResponse:
         return JSONResponse(status_code=503, content={"error": "BRAVE_API_KEY is not set"})
 
     headers = {"X-Subscription-Token": BRAVE_API_KEY, "Accept": "application/json"}
-    params = {"q": q, "count": DEFAULT_COUNT}
+    params: dict[str, str | int] = {"q": q, "count": DEFAULT_COUNT}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(BRAVE_ENDPOINT, params=params, headers=headers)

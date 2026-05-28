@@ -150,11 +150,14 @@ docker-compose profiles so operators who don't use them don't pull extra
 images.
 
 These use dedicated `otari_*` tool types. The keyword decides who runs the
-code: an `otari_*` type means the gateway runs it; the provider-named keywords
-(`code_interpreter`, `code_execution_<date>`, `web_search`,
-`web_search_<date>`) are passed through to the upstream provider untouched, so
-the provider runs them in its own native sandbox/search. Either way the gateway
-still handles routing, observability, and billing.
+code: an `otari_*` type means the gateway runs it. Every other tool type — the
+legacy gateway short forms (`code_execution`, `web_search`) and the
+provider-native keywords (`code_interpreter`, `code_execution_<date>`,
+`web_search_<date>`) — is passed through to the upstream provider untouched, so
+the provider runs it in its own native sandbox/search. (In particular, the bare
+`code_execution` / `web_search` short forms no longer trigger the gateway
+sandbox — use the `otari_*` types for that.) Either way the gateway still
+handles routing, observability, and billing.
 
 ### `otari_code_execution` — sandboxed Python REPL
 

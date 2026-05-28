@@ -6,8 +6,12 @@
 #
 # The tool-array `type` decides who runs the search:
 #   * otari_web_search   → the gateway's own web_search backend runs it
-#   * web_search / web_search_<date>  → passed through to the provider, which
-#     runs its native server-side search (the gateway just proxies)
+#   * web_search / web_search_<date>  → NOT intercepted; forwarded to the
+#     provider as-is. Whether the provider runs a native search depends on the
+#     provider AND endpoint — this script always calls /v1/chat/completions,
+#     where e.g. Anthropic's server-side web_search does NOT fire (it expects
+#     /v1/messages), so the model may just answer from memory. Use
+#     otari_web_search for the reliable gateway-run path.
 #
 # Env vars:
 #   GATEWAY_URL  — default http://localhost:${OTARI_PORT:-8000}
@@ -15,8 +19,8 @@
 #   GATEWAY_USER — default 'demo'
 #
 # Usage:
-#   ./ask.sh "What's the latest stable release of Python?"            # gateway backend
-#   ./ask.sh --model anthropic:... --tool-type web_search_20250305 "..."  # Anthropic native
+#   ./ask.sh "What's the latest stable release of Python?"   # otari_web_search (gateway runs it)
+#   ./ask.sh --tool-type web_search "..."                    # passthrough (see note above)
 
 set -euo pipefail
 
