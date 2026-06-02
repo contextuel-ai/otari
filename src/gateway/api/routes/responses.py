@@ -89,9 +89,10 @@ class ResponsesRequest(BaseModel):
     """OpenAI Responses API-compatible request.
 
     Gateway-internal fields (``mcp_servers``, ``mcp_server_ids``,
-    ``tools_header``, ``max_tool_iterations``) opt the request into
-    gateway-managed MCP / sandbox / web_search without changing the upstream
-    wire shape. They're stripped before the request is forwarded.
+    ``guardrails``, ``tools_header``, ``max_tool_iterations``) opt the request
+    into gateway-managed MCP / sandbox / web_search / guardrails without
+    changing the upstream wire shape. They're stripped before the request is
+    forwarded.
     """
 
     model_config = ConfigDict(extra="allow")

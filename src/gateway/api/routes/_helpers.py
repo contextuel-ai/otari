@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Response, status
@@ -103,7 +104,7 @@ def text_from_content(content: Any) -> str:
     return ""
 
 
-def latest_user_text(messages: list[dict[str, Any]]) -> str:
+def latest_user_text(messages: Sequence[Any]) -> str:
     """Return the text of the most recent ``role == "user"`` message.
 
     Falls back to the last message of any role if no user message is present.
@@ -117,7 +118,9 @@ def latest_user_text(messages: list[dict[str, Any]]) -> str:
     for message in reversed(messages):
         if isinstance(message, dict) and message.get("role") == "user":
             return text_from_content(message.get("content"))
-    return text_from_content(messages[-1].get("content")) if messages else ""
+    if messages and isinstance(messages[-1], dict):
+        return text_from_content(messages[-1].get("content"))
+    return ""
 
 
 async def apply_input_guardrails(

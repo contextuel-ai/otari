@@ -1017,7 +1017,7 @@
         "type": "object"
       },
       "MessagesRequest": {
-        "description": "Anthropic Messages API-compatible request.\n\nGateway-internal fields (``mcp_servers``, ``mcp_server_ids``,\n``tools_header``, ``max_tool_iterations``) opt the request into\ngateway-managed MCP / sandbox / web_search without changing the upstream\nwire shape. They're stripped before the request is forwarded.",
+        "description": "Anthropic Messages API-compatible request.\n\nGateway-internal fields (``mcp_servers``, ``mcp_server_ids``,\n``guardrails``, ``tools_header``, ``max_tool_iterations``) opt the request\ninto gateway-managed MCP / sandbox / web_search / guardrails without\nchanging the upstream wire shape. They're stripped before the request is\nforwarded.",
         "properties": {
           "cache_control": {
             "anyOf": [
@@ -1568,7 +1568,7 @@
       },
       "ResponsesRequest": {
         "additionalProperties": true,
-        "description": "OpenAI Responses API-compatible request.\n\nGateway-internal fields (``mcp_servers``, ``mcp_server_ids``,\n``tools_header``, ``max_tool_iterations``) opt the request into\ngateway-managed MCP / sandbox / web_search without changing the upstream\nwire shape. They're stripped before the request is forwarded.",
+        "description": "OpenAI Responses API-compatible request.\n\nGateway-internal fields (``mcp_servers``, ``mcp_server_ids``,\n``guardrails``, ``tools_header``, ``max_tool_iterations``) opt the request\ninto gateway-managed MCP / sandbox / web_search / guardrails without\nchanging the upstream wire shape. They're stripped before the request is\nforwarded.",
         "properties": {
           "guardrails": {
             "anyOf": [

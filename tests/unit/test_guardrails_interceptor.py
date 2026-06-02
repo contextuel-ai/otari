@@ -46,6 +46,13 @@ def test_latest_user_text_picks_last_user_message() -> None:
     assert latest_user_text(messages) == "second"
 
 
+def test_latest_user_text_handles_non_dict_items() -> None:
+    # /v1/responses `input` can be a list of arbitrary (non-dict) items; the
+    # no-user-message fallback must not raise AttributeError (Copilot review).
+    assert latest_user_text(["just a string"]) == ""
+    assert latest_user_text([{"type": "x"}]) == ""
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrails_noop_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     called = False

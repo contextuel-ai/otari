@@ -141,3 +141,41 @@ async def test_monitor_mode_fails_open_when_no_url(monkeypatch: pytest.MonkeyPat
     )
     assert verdict.blocked is False
     assert verdict.results[0].valid is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_result_block_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A result with no usable 'valid' must not silently pass a block guardrail."""
+    _patch_transport(monkeypatch, _result_handler({}))  # no 'valid' field
+    with pytest.raises(GuardrailsNotReachableError):
+        await run_input_guardrails([GuardrailConfig(profile="prompt-injection", mode="block")], "x", default_url=_URL)
+
+
+@pytest.mark.asyncio
+async def test_malformed_result_monitor_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same malformed result fails open (not blocked) for a monitor guardrail."""
+    _patch_transport(monkeypatch, _result_handler({}))
+    verdict = await run_input_guardrails(
+        [GuardrailConfig(profile="prompt-injection", mode="monitor")], "x", default_url=_URL
+    )
+    assert verdict.blocked is False
+    assert verdict.results[0].valid is None
+
+
+@pytest.mark.asyncio
+async def test_non_boolean_valid_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-boolean 'valid' (e.g. a string) is treated as malformed -> fail closed."""
+    _patch_transport(monkeypatch, _result_handler({"valid": "nope"}))
+    with pytest.raises(GuardrailsNotReachableError):
+        await run_input_guardrails([GuardrailConfig(profile="prompt-injection", mode="block")], "x", default_url=_URL)
+
+
+@pytest.mark.asyncio
+async def test_explicit_null_valid_is_inconclusive_not_flagged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit ``valid: null`` is a legitimate inconclusive verdict, not malformed."""
+    _patch_transport(monkeypatch, _result_handler({"valid": None, "score": 0.5}))
+    verdict = await run_input_guardrails(
+        [GuardrailConfig(profile="prompt-injection", mode="block")], "x", default_url=_URL
+    )
+    assert verdict.blocked is False
+    assert verdict.results[0].valid is None
