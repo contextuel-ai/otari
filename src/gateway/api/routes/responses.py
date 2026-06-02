@@ -19,7 +19,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import get_config, get_db_if_needed, get_log_writer, verify_api_key_or_master_key
-from gateway.api.routes._helpers import resolve_user_id
+from gateway.api.routes._helpers import (
+    apply_input_guardrails,
+    latest_user_text,
+    resolve_user_id,
+    text_from_content,
+)
 from gateway.api.routes._platform import (
     ResolvedAttempt,
     ResolvedRoute,
@@ -41,6 +46,7 @@ from gateway.api.routes.chat import get_provider_kwargs, log_usage, rate_limit_h
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
 from gateway.models.entities import APIKey
+from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import McpServerConfig
 from gateway.rate_limit import RateLimitInfo, check_rate_limit
 from gateway.services.budget_service import validate_user_budget
@@ -90,8 +96,23 @@ class ResponsesRequest(BaseModel):
     # Gateway-internal: identical semantics to ChatCompletionRequest.
     mcp_servers: list[McpServerConfig] | None = None
     mcp_server_ids: list[uuid.UUID] | None = None
+    guardrails: list[GuardrailConfig] | None = Field(default=None, max_length=8)
     tools_header: str | None = None
     max_tool_iterations: int | None = Field(default=None, ge=1, le=MAX_TOOL_ITERATIONS_CAP)
+
+
+def _responses_input_text(value: Any) -> str:
+    """Flatten the Responses ``input`` field to plain text for guardrail checks.
+
+    ``input`` may be a bare string or a list of input items sharing the
+    ``role``/``content`` shape used by chat/messages (text parts look like
+    ``{"type": "input_text", "text": "..."}``).
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return latest_user_text(value)
+    return text_from_content(value)
 
 
 def _usage_to_completion_usage(
@@ -201,6 +222,14 @@ async def create_response(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Provider '{provider.value}' does not support the Responses API",
             )
+
+    # Caller-requested input guardrails run before any provider/tool dispatch
+    # (see chat.py for the rationale). Stripped before forwarding upstream.
+    await apply_input_guardrails(
+        request_body.guardrails,
+        _responses_input_text(request_body.input),
+        response=response,
+    )
 
     # mcp_server_ids is platform-only.
     if request_body.mcp_server_ids and not platform_mode:

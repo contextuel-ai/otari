@@ -74,6 +74,7 @@ def _is_code_execution_tool_type(type_value: Any) -> bool:
 _GATEWAY_INTERNAL_FIELDS = (
     "mcp_servers",
     "mcp_server_ids",
+    "guardrails",
     "tools_header",
     "max_tool_iterations",
     "user",

@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import get_config, get_db_if_needed, get_log_writer, verify_api_key_or_master_key
-from gateway.api.routes._helpers import resolve_user_id
+from gateway.api.routes._helpers import apply_input_guardrails, latest_user_text, resolve_user_id
 from gateway.api.routes._platform import (
     _DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT_MS,
     _DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT_MS_TOOL_LOOP,
@@ -46,6 +46,7 @@ from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
 from gateway.metrics import record_cost, record_tokens
 from gateway.models.entities import APIKey, UsageLog
+from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import McpServerConfig
 from gateway.rate_limit import RateLimitInfo, check_rate_limit
 from gateway.services.budget_service import validate_user_budget
@@ -106,6 +107,7 @@ class ChatCompletionRequest(BaseModel):
     response_format: dict[str, Any] | None = None
     mcp_servers: list[McpServerConfig] | None = None
     mcp_server_ids: list[uuid.UUID] | None = None
+    guardrails: list[GuardrailConfig] | None = Field(default=None, max_length=8)
     tools_header: str | None = Field(
         default=None,
         max_length=4000,
@@ -271,6 +273,17 @@ async def chat_completions(
         _ = await validate_user_budget(db, user_id, request.model, strategy=config.budget_strategy)
         if config.budget_strategy == "for_update":
             await db.rollback()
+
+    # Caller-requested input guardrails run before any provider/tool dispatch.
+    # `block`-mode flags raise 403 here (provider never called); `monitor`-mode
+    # flags annotate the response header and fall through. No-op when the caller
+    # didn't send a `guardrails` field. The field is stripped before forwarding
+    # upstream by `_strip_gateway_fields`.
+    await apply_input_guardrails(
+        request.guardrails,
+        latest_user_text(request.messages),
+        response=response,
+    )
 
     # Workspace-scoped MCP server references (platform mode only). Callers
     # pass `mcp_server_ids: [uuid, ...]` instead of inlining each config; we
