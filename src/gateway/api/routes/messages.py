@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import get_config, get_db_if_needed, get_log_writer, verify_api_key_or_master_key
-from gateway.api.routes._helpers import resolve_user_id
+from gateway.api.routes._helpers import apply_input_guardrails, latest_user_text, resolve_user_id
 from gateway.api.routes._platform import (
     ResolvedAttempt,
     ResolvedRoute,
@@ -43,6 +43,7 @@ from gateway.api.routes.chat import get_provider_kwargs, log_usage, rate_limit_h
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
 from gateway.models.entities import APIKey
+from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import McpServerConfig
 from gateway.rate_limit import RateLimitInfo, check_rate_limit
 from gateway.services.budget_service import (
@@ -79,9 +80,10 @@ class MessagesRequest(BaseModel):
     """Anthropic Messages API-compatible request.
 
     Gateway-internal fields (``mcp_servers``, ``mcp_server_ids``,
-    ``tools_header``, ``max_tool_iterations``) opt the request into
-    gateway-managed MCP / sandbox / web_search without changing the upstream
-    wire shape. They're stripped before the request is forwarded.
+    ``guardrails``, ``tools_header``, ``max_tool_iterations``) opt the request
+    into gateway-managed MCP / sandbox / web_search / guardrails without
+    changing the upstream wire shape. They're stripped before the request is
+    forwarded.
     """
 
     model: str
@@ -102,6 +104,7 @@ class MessagesRequest(BaseModel):
     # Gateway-internal: identical semantics to ChatCompletionRequest.
     mcp_servers: list[McpServerConfig] | None = None
     mcp_server_ids: list[uuid.UUID] | None = None
+    guardrails: list[GuardrailConfig] | None = Field(default=None, max_length=8)
     tools_header: str | None = None
     max_tool_iterations: int | None = Field(default=None, ge=1, le=MAX_TOOL_ITERATIONS_CAP)
 
@@ -231,6 +234,14 @@ async def create_message(
                 f"No pricing configured for model '{request.model}'",
                 status.HTTP_402_PAYMENT_REQUIRED,
             )
+
+    # Caller-requested input guardrails run before any provider/tool dispatch
+    # (see chat.py for the rationale). Stripped before forwarding upstream.
+    await apply_input_guardrails(
+        request.guardrails,
+        latest_user_text(request.messages),
+        response=response,
+    )
 
     # mcp_server_ids is platform-only — standalone has no platform to
     # resolve them against, so we reject with a 400 rather than silently

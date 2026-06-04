@@ -38,6 +38,12 @@ services:
       - GATEWAY_WEB_SEARCH_MAX_RESULTS=${GATEWAY_WEB_SEARCH_MAX_RESULTS:-}
       - GATEWAY_WEB_SEARCH_EXTRACT=${GATEWAY_WEB_SEARCH_EXTRACT:-}
       - GATEWAY_WEB_SEARCH_PURPOSE_HINT=${GATEWAY_WEB_SEARCH_PURPOSE_HINT:-}
+      # In-network URL of the guardrails service — the otari-anyguardrails
+      # container, which exposes POST /validate over `any-guardrail`. Callers
+      # opt a request in per-request via the top-level `guardrails` field; the
+      # gateway runs the configured profile(s) against this URL before calling
+      # the provider. Brought up by the `guardrails` compose profile below.
+      - GATEWAY_GUARDRAILS_URL=${GATEWAY_GUARDRAILS_URL:-http://anyguardrails:8000}
       # Optional operator-level header for the per-tool hint block in the system
       # message. Falls back to "You have access to the following tools:" if unset.
       # Useful for tone/translation/deployment-wide preferences. Not per-request:
@@ -180,5 +186,73 @@ services:
       - BRAVE_API_KEY=${BRAVE_API_KEY:-}
     restart: unless-stopped
 
+  # Guardrails service — the otari-anyguardrails container, a stateless FastAPI
+  # service that wraps `any-guardrail` (https://github.com/mozilla-ai/any-guardrail)
+  # behind `POST /validate`. The gateway calls it whenever a request carries the
+  # top-level `guardrails` field (see services/guardrails.py). Source lives at
+  # https://github.com/mozilla-ai/otari-anyguardrails-container.
+  #
+  # The published image is multi-arch (linux/amd64 + linux/arm64). Override the
+  # tag via $OTARI_ANYGUARDRAILS_IMAGE. (If the pull 401s, the Docker Hub repo
+  # may still be private — it must be public for external users.)
+  #
+  # Opt-in via the `guardrails` compose profile — which also includes the
+  # `encoderfile` container below, so `docker compose --profile guardrails up`
+  # brings up the whole PIGuard-via-encoderfile guardrail with no extra flags.
+  # When this container is not running, the gateway returns a clean 502 to any
+  # request that uses `guardrails`. The mounted service config defaults to the
+  # encoderfile profile; `./start.sh --in-process` swaps in the
+  # InjecGuard/HuggingFace config and skips the encoderfile container.
+  anyguardrails:
+    profiles: ["guardrails"]
+    image: ${OTARI_ANYGUARDRAILS_IMAGE:-docker.io/mzdotai/otari-any-guardrail-container:latest}
+    ports:
+      # Localhost-only, like the other internal backends. The gateway reaches it
+      # over the Docker network at `anyguardrails:8000`; this mapping is for
+      # ad-hoc curl/debugging (e.g. GET /profiles, POST /validate).
+      - "127.0.0.1:8183:8000"
+    volumes:
+      # Guardrail config. Defaults to the encoderfile (PIGuard) profile; override
+      # with GUARDRAILS_CONFIG_PATH (start.sh --in-process points it at the
+      # InjecGuard/HF config). Mount path matches ANY_GUARDRAILS_CONFIG_PATHS.
+      - ${GUARDRAILS_CONFIG_PATH:-./demo/guardrails/guardrails-encoderfile-service.yaml}:/app/config/service.yaml:ro
+      # Cache HuggingFace model downloads across restarts (the first /validate
+      # for a HF-backed profile pulls the model).
+      - anyguardrails_hf_cache:/app/hf_cache
+    environment:
+      - ANY_GUARDRAILS_CONFIG_PATHS=/app/config/service.yaml
+      - HF_HUB_CACHE=/app/hf_cache
+      # HuggingFace token — required for gated models; harmless if unset for
+      # public ones. Passed from host env so it stays out of the config file.
+      - HF_TOKEN=${HF_TOKEN:-}
+    restart: unless-stopped
+
+  # Encoderfile backend — a single self-contained binary (Mozilla `encoderfile`,
+  # https://github.com/mozilla-ai/encoderfile) that serves a transformer encoder
+  # over HTTP. The anyguardrails container's `prompt-injection` profile reaches
+  # it via the EncoderfileProvider at http://encoderfile:8080 (see
+  # demo/guardrails/guardrails-encoderfile-service.yaml). The published image
+  # bakes in the PIGuard prompt-injection model.
+  #
+  # Part of the `guardrails` profile, so `docker compose --profile guardrails up`
+  # brings up the full prompt-injection guardrail (anyguardrails + encoderfile)
+  # with no extra flags. (`./start.sh --in-process` runs only gateway/postgres/
+  # anyguardrails with the HuggingFace config instead.)
+  #
+  # The encoderfile binary is architecture-specific, so the images are published
+  # per-arch (the arch is in the tag name, e.g. `.aarch64-linux-gnu` /
+  # `.x86_64-linux-gnu`) rather than as one multi-arch tag. The default below is
+  # the arm64 build; on x86 set OTARI_ENCODERFILE_IMAGE to the `.x86_64-linux-gnu`
+  # tag (the demo's start.sh picks the right one automatically via `uname -m`).
+  encoderfile:
+    profiles: ["guardrails"]
+    image: ${OTARI_ENCODERFILE_IMAGE:-docker.io/mzdotai/piguard.aarch64-linux-gnu-encoderfile:v0.6.2}
+    ports:
+      # Localhost-only debug port; the anyguardrails container reaches it over
+      # the Docker network at `encoderfile:8080`.
+      - "127.0.0.1:8184:8080"
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  anyguardrails_hf_cache:
