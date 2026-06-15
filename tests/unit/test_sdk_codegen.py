@@ -252,6 +252,121 @@ def test_enrich_types_reasoning_as_string_matching_wire_format() -> None:
         assert reasoning == {"type": "string"}, f"{prefix}_Reasoning must be a plain string, got {reasoning}"
 
 
+def _spec_with_freeform_union() -> dict[str, Any]:
+    # Mirrors how any-llm types Anthropic's ``system`` (``str | list[dict] | None``):
+    # an anyOf whose array variant has inline free-form-object items, alongside a
+    # single-variant ``tools`` (``list[dict] | None``) array.
+    free_form = {"additionalProperties": True, "type": "object"}
+    return {
+        "openapi": "3.1.0",
+        "info": {"title": "t", "version": "0"},
+        "components": {
+            "schemas": {
+                "MessagesRequest": {
+                    "type": "object",
+                    "properties": {
+                        "system": {
+                            "anyOf": [
+                                {"type": "string"},
+                                {"type": "array", "items": dict(free_form)},
+                                {"type": "null"},
+                            ]
+                        },
+                        "tools": {
+                            "anyOf": [
+                                {"type": "array", "items": dict(free_form)},
+                                {"type": "null"},
+                            ]
+                        },
+                    },
+                }
+            }
+        },
+    }
+
+
+def test_sanitize_freeform_object_arrays_names_union_array_items() -> None:
+    spec = generate.sanitize_freeform_object_arrays(_spec_with_freeform_union())
+    schemas = spec["components"]["schemas"]
+    assert schemas[generate._FREE_FORM_OBJECT] == {"type": "object", "additionalProperties": True}
+    props = schemas["MessagesRequest"]["properties"]
+    for field in ("system", "tools"):
+        array_variant = next(v for v in props[field]["anyOf"] if v.get("type") == "array")
+        assert array_variant["items"] == {
+            "$ref": f"#/components/schemas/{generate._FREE_FORM_OBJECT}"
+        }, f"{field} array items should reference the shared free-form object schema"
+
+
+def test_sanitize_freeform_object_arrays_leaves_closed_object_arrays() -> None:
+    # A closed object (additionalProperties: false) is not free-form: collapsing it
+    # to the open FreeFormObject would change the contract, so it must be left alone.
+    spec = {
+        "components": {
+            "schemas": {
+                "Closed": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "object", "additionalProperties": False}},
+                    ]
+                }
+            }
+        }
+    }
+    out = generate.sanitize_freeform_object_arrays(spec)
+    assert generate._FREE_FORM_OBJECT not in out["components"]["schemas"]
+    array_variant = next(v for v in out["components"]["schemas"]["Closed"]["anyOf"] if v.get("type") == "array")
+    assert array_variant["items"] == {"type": "object", "additionalProperties": False}
+
+
+def test_sanitize_freeform_object_arrays_leaves_typed_map_arrays() -> None:
+    # A typed map (additionalProperties is a schema) constrains its values, so it
+    # is not free-form and must not be collapsed to the open FreeFormObject.
+    typed_map = {"type": "object", "additionalProperties": {"type": "string"}}
+    spec = {
+        "components": {
+            "schemas": {
+                "TypedMap": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": dict(typed_map)},
+                    ]
+                }
+            }
+        }
+    }
+    out = generate.sanitize_freeform_object_arrays(spec)
+    assert generate._FREE_FORM_OBJECT not in out["components"]["schemas"]
+    array_variant = next(v for v in out["components"]["schemas"]["TypedMap"]["anyOf"] if v.get("type") == "array")
+    assert array_variant["items"] == typed_map
+
+
+def test_sanitize_freeform_object_arrays_raises_on_conflicting_existing_schema() -> None:
+    # A pre-existing FreeFormObject with different semantics must not be silently
+    # overwritten; the sanitizer cannot safely reuse the name.
+    spec = _spec_with_freeform_union()
+    spec["components"]["schemas"][generate._FREE_FORM_OBJECT] = {
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+    }
+    with pytest.raises(ValueError, match="different shape"):
+        generate.sanitize_freeform_object_arrays(spec)
+
+
+def test_sanitize_freeform_object_arrays_is_noop_without_freeform_unions() -> None:
+    spec = {
+        "components": {
+            "schemas": {
+                "Plain": {
+                    "type": "object",
+                    "properties": {"items": {"type": "array", "items": {"type": "string"}}},
+                }
+            }
+        }
+    }
+    out = generate.sanitize_freeform_object_arrays(spec)
+    assert generate._FREE_FORM_OBJECT not in out["components"]["schemas"]
+
+
 def test_control_plane_tags_are_typed_management_only() -> None:
     assert generate.CONTROL_PLANE_TAGS == frozenset(
         {"keys", "users", "budgets", "pricing", "usage"}
